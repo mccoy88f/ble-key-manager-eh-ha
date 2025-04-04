@@ -1,0 +1,169 @@
+# Configurazione di base per ESP32 BLE Key Manager
+esphome:
+  name: ble_key_manager
+  friendly_name: BLE Key Manager
+  comment: Sistema di gestione chiavi BLE
+
+# Configurazione ESP32
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Abilita il logging
+logger:
+  level: INFO
+  logs:
+    ble_client: INFO
+    ble_manager: INFO
+
+# Abilita OTA (Over The Air updates)
+ota:
+  password: !secret ota_password
+
+# Abilita API per ESPHome
+api:
+  password: !secret api_password
+
+# Configurazione WiFi
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "BLE Key Manager Fallback"
+    password: !secret fallback_password
+
+# Abilita il web server
+web_server:
+  port: 80
+  auth:
+    username: admin
+    password: !secret web_password
+
+# Configurazione Bluetooth
+ble_scanner:
+  scan_interval: 10s
+  active: true
+
+# Componenti personalizzati
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+
+# Pulsante fisico
+binary_sensor:
+  - platform: gpio
+    pin: GPIO0  # Pulsante BOOT su molte schede ESP32
+    name: "Pulsante Fisico"
+    id: physical_button
+    filters:
+      - delayed_off: 50ms
+    on_press:
+      then:
+        - lambda: |-
+            // Ottieni il dispositivo BLE più vicino autorizzato
+            auto devices = id(ble_device_manager).get_all_devices();
+            std::string closest_mac;
+            int32_t strongest_rssi = -100;
+            
+            for (const auto &device : devices) {
+              if (id(ble_device_manager).is_device_authorized(device.mac_address) && 
+                  device.last_seen > 0 && 
+                  (millis() / 1000 - device.last_seen) < 60 && 
+                  device.last_rssi > strongest_rssi) {
+                strongest_rssi = device.last_rssi;
+                closest_mac = device.mac_address;
+              }
+            }
+            
+            if (!closest_mac.empty()) {
+              auto device = id(ble_device_manager).get_device(closest_mac);
+              if (device != nullptr && !device->action_id.empty()) {
+                ESP_LOGI("ble_key_manager", "Esecuzione azione per %s: %s", 
+                         device->name.c_str(), device->action_id.c_str());
+                
+                // Esegui l'azione associata al dispositivo
+                if (device->action_id == "toggle_relay") {
+                  id(output_relay).toggle();
+                } else if (device->action_id == "turn_on_relay") {
+                  id(output_relay).turn_on();
+                } else if (device->action_id == "turn_off_relay") {
+                  id(output_relay).turn_off();
+                }
+                // Aggiungi altre azioni personalizzate qui
+              }
+            }
+
+# Relè di output (esempio di attuatore)
+output:
+  - platform: gpio
+    pin: GPIO2  # LED integrato su molte schede ESP32
+    id: output_relay
+
+switch:
+  - platform: output
+    name: "Relè di Output"
+    output: output_relay
+
+# Componenti personalizzati
+custom_component:
+  - lambda: |-
+      auto ble_manager = new esphome::BLEDeviceManager();
+      App.register_component(ble_manager);
+      return {ble_manager};
+    components:
+      - id: ble_device_manager
+
+  - lambda: |-
+      auto web_interface = new esphome::BLEWebInterface(id(ble_device_manager));
+      App.register_component(web_interface);
+      return {web_interface};
+
+# Sensore BLE per rilevare dispositivi
+ble_client:
+  - mac_address: FF:FF:FF:FF:FF:FF  # Placeholder, verrà sostituito dinamicamente
+    id: ble_client_placeholder
+
+# Sensore per monitorare i dispositivi BLE nelle vicinanze
+sensor:
+  - platform: template
+    name: "Dispositivi BLE Autorizzati"
+    lambda: |-
+      int count = 0;
+      auto devices = id(ble_device_manager).get_all_devices();
+      for (const auto &device : devices) {
+        if (id(ble_device_manager).is_device_authorized(device.mac_address)) {
+          count++;
+        }
+      }
+      return count;
+    update_interval: 60s
+
+# Sensore per monitorare i dispositivi BLE attivi nelle vicinanze
+  - platform: template
+    name: "Dispositivi BLE Attivi"
+    lambda: |-
+      int count = 0;
+      uint32_t current_time = millis() / 1000;
+      auto devices = id(ble_device_manager).get_all_devices();
+      for (const auto &device : devices) {
+        if (device.last_seen > 0 && (current_time - device.last_seen) < 300) {
+          count++;
+        }
+      }
+      return count;
+    update_interval: 60s
+
+# Gestione dei dispositivi BLE rilevati
+interval:
+  - interval: 5s
+    then:
+      - lambda: |-
+          // Aggiorna lo stato dei dispositivi BLE rilevati
+          for (auto &address : id(ble_scanner).get_addresses()) {
+            std::string mac = address.to_string();
+            int rssi = address.get_rssi();
+            
+            // Aggiorna l'ultima rilevazione del dispositivo
+            id(ble_device_manager).update_device_seen(mac, rssi);
+          }
