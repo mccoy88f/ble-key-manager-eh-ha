@@ -6,7 +6,7 @@ from esphome.components import web_server_base
 from esphome.const import CONF_ID
 
 AUTO_LOAD = ['web_server_base']
-DEPENDENCIES = ['web_server_base', 'esp32_ble_tracker', 'ble_scanner']
+DEPENDENCIES = ['web_server_base', 'esp32_ble_tracker']
 
 ble_key_manager_ns = cg.esphome_ns.namespace('esphome')
 BLEDeviceManager = ble_key_manager_ns.class_('BLEDeviceManager', cg.Component)
